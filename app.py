@@ -140,5 +140,31 @@ def handle_leave_room(data):
         if room_id in rooms:
             del rooms[room_id]
 
+@app.route('/admob-reward', methods=['GET'])
+def admob_reward():
+    # AdMob SSV parameters:
+    # ad_network, ad_unit, reward_amount, reward_item, timestamp, transaction_id, user_id, signature, key_id
+    ad_unit = request.args.get('ad_unit')
+    reward_amount = request.args.get('reward_amount')
+    user_id = request.args.get('user_id')
+    transaction_id = request.args.get('transaction_id')
+    
+    print(f"AdMob Reward Callback: User {user_id} earned {reward_amount} from {ad_unit}. Transaction: {transaction_id}")
+    
+    # IMPORTANT: In a production app, you MUST verify the signature here using Google's public keys
+    # to ensure the request actually came from AdMob and wasn't spoofed.
+    # You should also check if the transaction_id has already been processed to prevent replay attacks.
+    
+    if user_id:
+        # Here you would update your DATABASE:
+        # db.users.update_one({'id': user_id}, {'$inc': {'coins': int(reward_amount)}})
+        return "OK", 200
+    
+    return "Missing user_id", 400
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return "OK", 200
+
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
