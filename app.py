@@ -1,3 +1,9 @@
+try:
+    import gevent.monkey
+    gevent.monkey.patch_all()
+except ImportError:
+    pass
+
 from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import uuid
@@ -9,7 +15,7 @@ import firebase_admin
 from firebase_admin import credentials, messaging, firestore
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 # Initialize Firebase Admin
 service_account_info = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
@@ -241,7 +247,7 @@ def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, 
             data={
                 'type': 'video_call',
                 'caller_name': caller_name,
-                'caller_uid': caller_sid,
+                'caller_uid': str(caller_sid), # Convert SID to string
                 'room_id': room_id,
                 'caller_photo_url': caller_photo_url or '',
             },
