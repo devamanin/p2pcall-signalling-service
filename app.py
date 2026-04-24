@@ -10,6 +10,9 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 # rooms: room_id -> { offer, status, createdBy, joinedBy, metadata, createdAt }
 rooms = {}
 
+# previous_matches: sid -> last_partner_sid (to prevent immediate re-matching)
+previous_matches = {}
+
 # Reverse lookup: sid -> set of room_ids they are in (creator or joiner)
 user_rooms = {}
 
@@ -142,7 +145,8 @@ def handle_disconnect():
         # Final cleanup of tracking
         if sid in user_rooms:
             del user_rooms[sid]
-
+        if sid in previous_matches:
+            del previous_matches[sid]
 
 @socketio.on('find_room')
 def handle_find_room(data):
@@ -153,9 +157,13 @@ def handle_find_room(data):
     # First, purge stale rooms
     _purge_stale_rooms()
     
-    print(f"[Server] User {sid[:8]} searching. Active rooms: {len(rooms)}, "
-          f"waiting: {sum(1 for r in rooms.values() if r['status'] == 'waiting')}")
+    print(f"[Server] User {sid[:8]} searching. Active rooms: {len(rooms)}")
     
+    # Get last partner to avoid immediate re-match
+    last_partner = previous_matches.get(sid)
+    
+    candidates = []
+
     for room_id, room in rooms.items():
         # Must be waiting, not created by me, and not stale
         if room['status'] != 'waiting':
@@ -165,9 +173,13 @@ def handle_find_room(data):
         if (now - room.get('createdAt', 0)) > STALE_ROOM_TTL:
             continue
             
+        # Anti-repeat check
+        if room['createdBy'] == last_partner:
+            continue
+
         room_meta = room.get('metadata', {})
         
-        # Gender matching
+        # Gender matching (Hard requirement)
         if my_metadata.get('targetGender') != 'Any Gender':
             if room_meta.get('myGender') != my_metadata.get('targetGender'):
                 continue
@@ -176,12 +188,37 @@ def handle_find_room(data):
             if my_metadata.get('myGender') != room_meta.get('targetGender'):
                 continue
         
-        print(f"[Server] Matched {sid[:8]} with room {room_id[:8]} "
-              f"(creator: {room['createdBy'][:8]}, age: {now - room.get('createdAt', 0):.1f}s)")
-        return {'room_id': room_id}
+        # Calculate Match Score (Soft requirements)
+        score = 0
+        
+        # 1. Interests (High priority)
+        my_interests = set(my_metadata.get('interests', []))
+        room_interests = set(room_meta.get('interests', []))
+        shared_interests = my_interests.intersection(room_interests)
+        score += len(shared_interests) * 10
+        
+        # 2. Location (Medium priority)
+        if my_metadata.get('location') == room_meta.get('location') and my_metadata.get('location') != 'Global':
+            score += 5
+            
+        candidates.append({
+            'room_id': room_id,
+            'score': score,
+            'createdAt': room.get('createdAt', 0)
+        })
+
+    if not candidates:
+        print(f"[Server] No room found for {sid[:8]}")
+        return {'room_id': None}
+        
+    # Sort by score (descending) and then by age (oldest first)
+    # This ensures "Magic Matches" are picked first, but fallback happens naturally
+    candidates.sort(key=lambda x: (x['score'], -x['createdAt']), reverse=True)
     
-    print(f"[Server] No room found for {sid[:8]}")
-    return {'room_id': None}
+    best_match = candidates[0]
+    print(f"[Server] Best match for {sid[:8]} is {best_match['room_id'][:8]} with score {best_match['score']}")
+    
+    return {'room_id': best_match['room_id']}
 
 
 @socketio.on('create_room')
@@ -241,6 +278,11 @@ def handle_join_room(data):
     # IMMEDIATELY mark as occupied to prevent race conditions
     room['status'] = 'occupied'
     room['joinedBy'] = sid
+    
+    # Track as previous match for both parties
+    creator_sid = room['createdBy']
+    previous_matches[sid] = creator_sid
+    previous_matches[creator_sid] = sid
     
     join_room(room_id)
     _track_user_room(sid, room_id)
