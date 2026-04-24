@@ -3,11 +3,31 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import uuid
 import time
 import threading
+import os
+import json
+import firebase_admin
+from firebase_admin import credentials, messaging, firestore
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# rooms: room_id -> { offer, status, createdBy, joinedBy, metadata, createdAt }
+# Initialize Firebase Admin
+service_account_info = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
+if service_account_info:
+    try:
+        cred = credentials.Certificate(json.loads(service_account_info))
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("[Firebase] Admin SDK initialized successfully")
+    except Exception as e:
+        print(f"[Firebase] Error initializing Admin SDK: {e}")
+        db = None
+else:
+    db = None
+    print("[Firebase] FIREBASE_SERVICE_ACCOUNT not found. Push notifications will be disabled.")
+
+# rooms: room_id -> {id, offer, status, createdBy, joinedBy, metadata, createdAt}
+
 rooms = {}
 
 # previous_matches: sid -> last_partner_sid (to prevent immediate re-matching)
@@ -169,6 +189,62 @@ def handle_disconnect():
             del user_rooms[sid]
         if sid in previous_matches:
             del previous_matches[sid]
+
+@socketio.on('notify_call')
+def handle_notify_call(data):
+    if db is None:
+        return {'success': False, 'message': 'Firebase Admin not initialized'}
+    
+    target_uid = data.get('target_uid')
+    caller_name = data.get('caller_name', 'Someone')
+    room_id = data.get('room_id')
+    caller_photo_url = data.get('caller_photo_url')
+
+    print(f"[Server] Notification requested for {target_uid[:8]} from {caller_name}")
+
+    try:
+        # 1. Fetch target user's FCM token from Firestore
+        user_doc = db.collection('users').document(target_uid).get()
+        if not user_doc.exists:
+            return {'success': False, 'message': 'User not found'}
+        
+        fcm_token = user_doc.to_dict().get('fcmToken')
+        if not fcm_token:
+            print(f"[Server] No FCM token for user {target_uid[:8]}")
+            return {'success': False, 'message': 'User has no FCM token'}
+
+        # 2. Send Push Notification
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title='Incoming Video Call',
+                body=f'{caller_name} is calling you!',
+            ),
+            data={
+                'type': 'video_call',
+                'caller_name': caller_name,
+                'caller_uid': request.sid, # Or caller's real UID if provided
+                'room_id': room_id,
+                'caller_photo_url': caller_photo_url or '',
+            },
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    channel_id='high_importance_channel',
+                    priority='max',
+                    click_action='FLUTTER_NOTIFICATION_CLICK'
+                ),
+            ),
+            token=fcm_token,
+        )
+
+        response = messaging.send(message)
+        print(f"[Server] Successfully sent FCM message: {response}")
+        return {'success': True}
+
+    except Exception as e:
+        print(f"[Server] Error sending FCM: {e}")
+        return {'success': False, 'message': str(e)}
+
 
 @socketio.on('find_room')
 def handle_find_room(data):
