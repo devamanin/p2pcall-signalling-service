@@ -1,5 +1,4 @@
 flask
 flask-socketio
-gevent
 gunicorn
 firebase-admin

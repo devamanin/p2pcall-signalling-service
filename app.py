@@ -1,9 +1,3 @@
-try:
-    import gevent.monkey
-    gevent.monkey.patch_all()
-except ImportError:
-    pass
-
 from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import uuid
@@ -15,7 +9,8 @@ import firebase_admin
 from firebase_admin import credentials, messaging, firestore
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+# Using threading mode as it is more compatible with Firebase Admin SDK than gevent/eventlet
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Initialize Firebase Admin
 service_account_info = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
@@ -216,16 +211,16 @@ def handle_notify_call(data):
     caller_name = data.get('caller_name', 'Someone')
     room_id = data.get('room_id')
     caller_photo_url = data.get('caller_photo_url')
-    caller_sid = request.sid
+    caller_uid = data.get('caller_uid', '')  # Real Firebase UID from client
 
-    print(f"[Server] Notification requested for {target_uid[:8]} from {caller_name}")
+    print(f"[Server] Notification requested for {target_uid[:8]} from {caller_name} (uid: {caller_uid[:8] if caller_uid else 'N/A'})")
 
     # Run Firebase operations in a background thread to prevent blocking the signaling loop
-    threading.Thread(target=_send_call_notification, args=(target_uid, caller_name, room_id, caller_photo_url, caller_sid)).start()
+    threading.Thread(target=_send_call_notification, args=(target_uid, caller_name, room_id, caller_photo_url, caller_uid)).start()
     
     return {'success': True, 'message': 'Notification queued'}
 
-def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, caller_sid):
+def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, caller_uid):
     try:
         # 1. Fetch target user's FCM token from Firestore
         user_doc = db.collection('users').document(target_uid).get()
@@ -238,25 +233,26 @@ def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, 
             print(f"[Server] Notification FAILED: User {target_uid[:8]} has no FCM token")
             return
 
-        # 2. Send Push Notification
+        # 2. Send Push Notification via FCM data-only message
+        #    Data-only ensures delivery even if the app is killed (Android)
         message = messaging.Message(
-            notification=messaging.Notification(
-                title='Incoming Video Call',
-                body=f'{caller_name} is calling you!',
-            ),
             data={
                 'type': 'video_call',
                 'caller_name': caller_name,
-                'caller_uid': str(caller_sid), # Convert SID to string
+                'caller_uid': caller_uid or '',  # Real Firebase UID
                 'room_id': room_id,
                 'caller_photo_url': caller_photo_url or '',
             },
             android=messaging.AndroidConfig(
                 priority='high',
-                notification=messaging.AndroidNotification(
-                    channel_id='high_importance_channel',
-                    priority='max',
-                    click_action='FLUTTER_NOTIFICATION_CLICK'
+            ),
+            apns=messaging.APNSConfig(
+                headers={'apns-priority': '10'},
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        content_available=True,
+                        sound='default',
+                    )
                 ),
             ),
             token=fcm_token,
