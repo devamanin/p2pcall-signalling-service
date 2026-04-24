@@ -13,18 +13,29 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Initialize Firebase Admin
 service_account_info = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
+service_account_path = os.path.join(os.path.dirname(__file__), 'service-account.json')
+
 if service_account_info:
     try:
         cred = credentials.Certificate(json.loads(service_account_info))
         firebase_admin.initialize_app(cred)
         db = firestore.client()
-        print("[Firebase] Admin SDK initialized successfully")
+        print("[Firebase] Admin SDK initialized via environment variable")
     except Exception as e:
-        print(f"[Firebase] Error initializing Admin SDK: {e}")
+        print(f"[Firebase] Error initializing Admin SDK from ENV: {e}")
+        db = None
+elif os.path.exists(service_account_path):
+    try:
+        cred = credentials.Certificate(service_account_path)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print(f"[Firebase] Admin SDK initialized via {service_account_path}")
+    except Exception as e:
+        print(f"[Firebase] Error initializing Admin SDK from file: {e}")
         db = None
 else:
     db = None
-    print("[Firebase] FIREBASE_SERVICE_ACCOUNT not found. Push notifications will be disabled.")
+    print("[Firebase] No credentials found (FIREBASE_SERVICE_ACCOUNT or service-account.json). Push notifications will be disabled.")
 
 # rooms: room_id -> {id, offer, status, createdBy, joinedBy, metadata, createdAt}
 
@@ -199,19 +210,27 @@ def handle_notify_call(data):
     caller_name = data.get('caller_name', 'Someone')
     room_id = data.get('room_id')
     caller_photo_url = data.get('caller_photo_url')
+    caller_sid = request.sid
 
     print(f"[Server] Notification requested for {target_uid[:8]} from {caller_name}")
 
+    # Run Firebase operations in a background thread to prevent blocking the signaling loop
+    threading.Thread(target=_send_call_notification, args=(target_uid, caller_name, room_id, caller_photo_url, caller_sid)).start()
+    
+    return {'success': True, 'message': 'Notification queued'}
+
+def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, caller_sid):
     try:
         # 1. Fetch target user's FCM token from Firestore
         user_doc = db.collection('users').document(target_uid).get()
         if not user_doc.exists:
-            return {'success': False, 'message': 'User not found'}
+            print(f"[Server] Notification FAILED: User {target_uid[:8]} not found in DB")
+            return
         
         fcm_token = user_doc.to_dict().get('fcmToken')
         if not fcm_token:
-            print(f"[Server] No FCM token for user {target_uid[:8]}")
-            return {'success': False, 'message': 'User has no FCM token'}
+            print(f"[Server] Notification FAILED: User {target_uid[:8]} has no FCM token")
+            return
 
         # 2. Send Push Notification
         message = messaging.Message(
@@ -222,7 +241,7 @@ def handle_notify_call(data):
             data={
                 'type': 'video_call',
                 'caller_name': caller_name,
-                'caller_uid': request.sid, # Or caller's real UID if provided
+                'caller_uid': caller_sid,
                 'room_id': room_id,
                 'caller_photo_url': caller_photo_url or '',
             },
@@ -239,11 +258,9 @@ def handle_notify_call(data):
 
         response = messaging.send(message)
         print(f"[Server] Successfully sent FCM message: {response}")
-        return {'success': True}
 
     except Exception as e:
-        print(f"[Server] Error sending FCM: {e}")
-        return {'success': False, 'message': str(e)}
+        print(f"[Server] Error sending FCM background task: {e}")
 
 
 @socketio.on('find_room')
