@@ -19,6 +19,28 @@ user_rooms = {}
 # Lock for thread-safe room operations
 rooms_lock = threading.Lock()
 
+# Region mapping for absolute location matching
+REGION_MAP = {
+    'North America': ['USA', 'Canada', 'Mexico', 'United States'],
+    'Europe': ['UK', 'United Kingdom', 'France', 'Germany', 'Italy', 'Spain', 'Netherlands', 'Sweden', 'Norway', 'Denmark', 'Ireland', 'Switzerland', 'Austria', 'Belgium', 'Poland', 'Portugal'],
+    'Asia': ['India', 'Japan', 'China', 'South Korea', 'Singapore', 'Thailand', 'Vietnam', 'Indonesia', 'Malaysia', 'Philippines', 'Pakistan', 'Bangladesh', 'Sri Lanka'],
+    'South America': ['Brazil', 'Argentina', 'Colombia', 'Peru', 'Chile', 'Ecuador', 'Venezuela', 'Bolivia', 'Paraguay', 'Uruguay'],
+    'Oceania': ['Australia', 'New Zealand', 'Fiji', 'Papua New Guinea']
+}
+
+def _get_region_from_location(location_str):
+    """Determine the region from a 'City, Country' string."""
+    if not location_str or location_str == 'Global':
+        return None
+    
+    # Extract country name (usually after the comma)
+    country = location_str.split(',')[-1].strip()
+    
+    for region, countries in REGION_MAP.items():
+        if any(c.lower() in country.lower() for c in countries):
+            return region
+    return None
+
 # Max age for a 'waiting' room before it's considered stale (seconds)
 STALE_ROOM_TTL = 30
 
@@ -188,6 +210,21 @@ def handle_find_room(data):
             if my_metadata.get('myGender') != room_meta.get('targetGender'):
                 continue
         
+        # 3. Absolute Location Matching (Hard requirement)
+        # Check if searching User A is okay with User B's physical region
+        my_location_filters = my_metadata.get('locations', ['Global'])
+        if 'Global' not in my_location_filters:
+            creator_physical_region = _get_region_from_location(room_meta.get('location'))
+            if creator_physical_region not in my_location_filters:
+                continue
+        
+        # Check if room creator User B is okay with User A's physical region
+        creator_location_filters = room_meta.get('locations', ['Global'])
+        if 'Global' not in creator_location_filters:
+            my_physical_region = _get_region_from_location(my_metadata.get('location'))
+            if my_physical_region not in creator_location_filters:
+                continue
+
         # Calculate Match Score (Soft requirements)
         score = 0
         
