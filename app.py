@@ -1,5 +1,5 @@
-from gevent import monkey
-monkey.patch_all()
+import eventlet
+eventlet.monkey_patch()
 
 from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -8,38 +8,69 @@ import time
 import threading
 import os
 import json
+import requests as http_requests
 import firebase_admin
-from firebase_admin import credentials, messaging, firestore
+from firebase_admin import credentials, messaging
 
 app = Flask(__name__)
-# Using gevent mode for production compatibility with gunicorn gevent workers
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+# Using eventlet for production compatibility with gunicorn on Render
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # Initialize Firebase Admin
 service_account_info = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
 service_account_path = os.path.join(os.path.dirname(__file__), 'service-account.json')
 
+firebase_app = None
+_firebase_project_id = None
+
 if service_account_info:
     try:
-        cred = credentials.Certificate(json.loads(service_account_info))
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
+        sa_info = json.loads(service_account_info)
+        cred = credentials.Certificate(sa_info)
+        firebase_app = firebase_admin.initialize_app(cred)
+        _firebase_project_id = sa_info.get('project_id')
         print("[Firebase] Admin SDK initialized via environment variable")
     except Exception as e:
         print(f"[Firebase] Error initializing Admin SDK from ENV: {e}")
-        db = None
 elif os.path.exists(service_account_path):
     try:
-        cred = credentials.Certificate(service_account_path)
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
+        with open(service_account_path) as f:
+            sa_info = json.load(f)
+        cred = credentials.Certificate(sa_info)
+        firebase_app = firebase_admin.initialize_app(cred)
+        _firebase_project_id = sa_info.get('project_id')
         print(f"[Firebase] Admin SDK initialized via {service_account_path}")
     except Exception as e:
         print(f"[Firebase] Error initializing Admin SDK from file: {e}")
-        db = None
 else:
-    db = None
     print("[Firebase] No credentials found (FIREBASE_SERVICE_ACCOUNT or service-account.json). Push notifications will be disabled.")
+
+
+def _get_fcm_token_via_rest(target_uid):
+    """Fetch a user's FCM token via Firestore REST API (avoids gRPC/eventlet conflicts)."""
+    if not _firebase_project_id or not firebase_app:
+        return None
+    try:
+        # Get an access token from the Firebase Admin credential
+        access_token = firebase_app.credential.get_access_token().access_token
+        url = (f'https://firestore.googleapis.com/v1/projects/{_firebase_project_id}'
+               f'/databases/(default)/documents/users/{target_uid}')
+        headers = {'Authorization': f'Bearer {access_token}'}
+        params = {'mask.fieldPaths': 'fcmToken'}  # Only fetch the field we need
+        resp = http_requests.get(url, headers=headers, params=params, timeout=10)
+        if resp.status_code == 200:
+            fields = resp.json().get('fields', {})
+            token_field = fields.get('fcmToken', {})
+            return token_field.get('stringValue')
+        elif resp.status_code == 404:
+            print(f"[Firestore REST] User {target_uid[:8]} not found")
+            return None
+        else:
+            print(f"[Firestore REST] Error {resp.status_code}: {resp.text[:200]}")
+            return None
+    except Exception as e:
+        print(f"[Firestore REST] Exception: {e}")
+        return None
 
 # rooms: room_id -> {id, offer, status, createdBy, joinedBy, metadata, createdAt}
 
@@ -207,7 +238,7 @@ def handle_disconnect():
 
 @socketio.on('notify_call')
 def handle_notify_call(data):
-    if db is None:
+    if firebase_app is None:
         return {'success': False, 'message': 'Firebase Admin not initialized'}
     
     target_uid = data.get('target_uid')
@@ -225,24 +256,18 @@ def handle_notify_call(data):
 
 def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, caller_uid):
     try:
-        # 1. Fetch target user's FCM token from Firestore
-        user_doc = db.collection('users').document(target_uid).get()
-        if not user_doc.exists:
-            print(f"[Server] Notification FAILED: User {target_uid[:8]} not found in DB")
-            return
-        
-        fcm_token = user_doc.to_dict().get('fcmToken')
+        # 1. Fetch target user's FCM token via REST (avoids gRPC/eventlet conflicts)
+        fcm_token = _get_fcm_token_via_rest(target_uid)
         if not fcm_token:
-            print(f"[Server] Notification FAILED: User {target_uid[:8]} has no FCM token")
+            print(f"[Server] Notification FAILED: User {target_uid[:8]} has no FCM token or not found")
             return
 
-        # 2. Send Push Notification via FCM data-only message
-        #    Data-only ensures delivery even if the app is killed (Android)
+        # 2. Send Push Notification via FCM data-only message (uses HTTP, safe with eventlet)
         message = messaging.Message(
             data={
                 'type': 'video_call',
                 'caller_name': caller_name,
-                'caller_uid': caller_uid or '',  # Real Firebase UID
+                'caller_uid': caller_uid or '',
                 'room_id': room_id,
                 'caller_photo_url': caller_photo_url or '',
             },
