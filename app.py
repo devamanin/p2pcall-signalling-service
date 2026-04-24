@@ -332,6 +332,54 @@ def handle_join_room(data):
     return {'success': True, 'offer': room['offer'], 'metadata': room['metadata']}
 
 
+@socketio.on('create_private_room')
+def handle_create_private_room(data):
+    sid = request.sid
+    room_id = str(uuid.uuid4())
+    rooms[room_id] = {
+        'id': room_id,
+        'offer': data['offer'],
+        'status': 'private',
+        'createdBy': sid,
+        'joinedBy': None,
+        'metadata': data.get('metadata', {}),
+        'createdAt': time.time()
+    }
+    join_room(room_id)
+    _track_user_room(sid, room_id)
+    
+    print(f"[Server] Private Room created by {sid[:8]}: {room_id[:8]}")
+    return {'room_id': room_id}
+
+
+@socketio.on('join_private_room')
+def handle_join_private_room(data):
+    room_id = data['room_id']
+    sid = request.sid
+    print(f"[Server] Client {sid[:8]} attempting to join private room: {room_id[:8]}")
+    
+    if room_id not in rooms:
+        print(f"[Server] Private Join FAILED: room {room_id[:8]} does not exist")
+        return {'success': False, 'message': 'Room does not exist'}
+    
+    room = rooms[room_id]
+    
+    if room['status'] != 'private':
+        print(f"[Server] Private Join FAILED: room {room_id[:8]} status is not private")
+        return {'success': False, 'message': 'Room is not available for private join'}
+    
+    room['status'] = 'occupied'
+    room['joinedBy'] = sid
+    
+    join_room(room_id)
+    _track_user_room(sid, room_id)
+    
+    emit('peer_joined', {'metadata': data.get('metadata', {})}, to=room_id, include_self=False)
+    
+    print(f"[Server] Client {sid[:8]} joined private room {room_id[:8]}")
+    return {'success': True, 'offer': room['offer'], 'metadata': room['metadata']}
+
+
 @socketio.on('send_answer')
 def handle_send_answer(data):
     room_id = data['room_id']
