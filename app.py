@@ -1,3 +1,6 @@
+from gevent import monkey
+monkey.patch_all()
+
 from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import uuid
@@ -9,8 +12,8 @@ import firebase_admin
 from firebase_admin import credentials, messaging, firestore
 
 app = Flask(__name__)
-# Using threading mode as it is more compatible with Firebase Admin SDK than gevent/eventlet
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# Using gevent mode for production compatibility with gunicorn gevent workers
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 # Initialize Firebase Admin
 service_account_info = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
