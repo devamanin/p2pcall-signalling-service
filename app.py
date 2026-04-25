@@ -292,6 +292,39 @@ def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, 
     except Exception as e:
         print(f"[Server] Error sending FCM background task: {e}")
 
+@socketio.on('cancel_call')
+def handle_cancel_call(data):
+    if firebase_app is None:
+        return {'success': False, 'message': 'Firebase Admin not initialized'}
+    
+    target_uid = data.get('target_uid')
+    print(f"[Server] Cancel call requested for {target_uid[:8]}")
+
+    threading.Thread(target=_send_cancel_notification, args=(target_uid,)).start()
+    return {'success': True, 'message': 'Cancel notification queued'}
+
+def _send_cancel_notification(target_uid):
+    try:
+        fcm_token = _get_fcm_token_via_rest(target_uid)
+        if not fcm_token:
+            return
+
+        message = messaging.Message(
+            data={'type': 'cancel_call'},
+            android=messaging.AndroidConfig(priority='high'),
+            apns=messaging.APNSConfig(
+                headers={'apns-priority': '10'},
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(content_available=True)
+                ),
+            ),
+            token=fcm_token,
+        )
+
+        messaging.send(message)
+        print(f"[Server] Successfully sent Cancel FCM message")
+    except Exception as e:
+        print(f"[Server] Error sending Cancel FCM task: {e}")
 
 @socketio.on('find_room')
 def handle_find_room(data):
