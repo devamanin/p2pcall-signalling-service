@@ -249,8 +249,8 @@ def handle_notify_call(data):
 
     print(f"[Server] Notification requested for {target_uid[:8]} from {caller_name} (uid: {caller_uid[:8] if caller_uid else 'N/A'})")
 
-    # Run Firebase operations in a background thread to prevent blocking the signaling loop
-    threading.Thread(target=_send_call_notification, args=(target_uid, caller_name, room_id, caller_photo_url, caller_uid)).start()
+    # Run Firebase operations in a background task to prevent blocking the signaling loop
+    socketio.start_background_task(_send_call_notification, target_uid, caller_name, room_id, caller_photo_url, caller_uid)
     
     return {'success': True, 'message': 'Notification queued'}
 
@@ -300,7 +300,7 @@ def handle_cancel_call(data):
     target_uid = data.get('target_uid')
     print(f"[Server] Cancel call requested for {target_uid[:8]}")
 
-    threading.Thread(target=_send_cancel_notification, args=(target_uid,)).start()
+    socketio.start_background_task(_send_cancel_notification, target_uid)
     return {'success': True, 'message': 'Cancel notification queued'}
 
 def _send_cancel_notification(target_uid):
