@@ -262,17 +262,33 @@ def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, 
             print(f"[Server] Notification FAILED: User {target_uid[:8]} has no FCM token or not found")
             return
 
-        # 2. Send Push Notification via FCM data-only message (uses HTTP, safe with eventlet)
+        import datetime
+        # 2. Send Push Notification via FCM (High Priority)
         message = messaging.Message(
+            notification=messaging.Notification(
+                title='Incoming Video Call',
+                body=f'{caller_name} is calling you...',
+                image=caller_photo_url,
+            ),
             data={
                 'type': 'video_call',
                 'caller_name': caller_name,
                 'caller_uid': caller_uid or '',
                 'room_id': room_id,
                 'caller_photo_url': caller_photo_url or '',
+                'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+                'id': room_id, # Some plugins use id at root level
             },
             android=messaging.AndroidConfig(
                 priority='high',
+                ttl=datetime.timedelta(seconds=45),
+                notification=messaging.AndroidNotification(
+                    channel_id='high_importance_channel',
+                    tag=target_uid, # Replaces existing notification for this user
+                    priority='max',
+                    sound='default',
+                    visibility='public',
+                ),
             ),
             apns=messaging.APNSConfig(
                 headers={'apns-priority': '10'},
@@ -280,6 +296,7 @@ def _send_call_notification(target_uid, caller_name, room_id, caller_photo_url, 
                     aps=messaging.Aps(
                         content_available=True,
                         sound='default',
+                        category='INCOMING_CALL'
                     )
                 ),
             ),
@@ -504,35 +521,50 @@ def handle_create_private_room(data):
     join_room(room_id)
     _track_user_room(sid, room_id)
     
-    print(f"[Server] Private Room created by {sid[:8]}: {room_id[:8]}")
+    print(f"[Server] Private Room CREATED: {room_id} (creator={sid[:8]})")
     return {'room_id': room_id}
 
 
 @socketio.on('join_private_room')
 def handle_join_private_room(data):
-    room_id = data['room_id']
+    room_id = data.get('room_id')
     sid = request.sid
-    print(f"[Server] Client {sid[:8]} attempting to join private room: {room_id[:8]}")
+    print(f"[Server] Client {sid[:8]} ATTEMPTING to join private room: {room_id}")
     
+    if not room_id:
+        print(f"[Server] Private Join FAILED: No room_id provided in data: {data}")
+        return {'success': False, 'message': 'No room_id provided'}
+
     if room_id not in rooms:
-        print(f"[Server] Private Join FAILED: room {room_id[:8]} does not exist")
-        return {'success': False, 'message': 'Room does not exist'}
+        # Check for case sensitivity or whitespace
+        room_id_str = str(room_id).strip()
+        if room_id_str in rooms:
+             room_id = room_id_str
+        else:
+             active_rooms = list(rooms.keys())
+             print(f"[Server] Private Join FAILED: room {room_id} not found. Active rooms: {active_rooms}")
+             return {'success': False, 'message': f'Room {room_id} not found. Active count: {len(active_rooms)}'}
     
     room = rooms[room_id]
     
-    if room['status'] != 'private':
-        print(f"[Server] Private Join FAILED: room {room_id[:8]} status is not private")
-        return {'success': False, 'message': 'Room is not available for private join'}
+    # Debug: log room state
+    print(f"[Server] Found room {room_id[:8]}: status={room['status']}, creator={room['createdBy'][:8]}")
+
+    if room['status'] != 'private' and room['status'] != 'occupied':
+        print(f"[Server] Private Join FAILED: room {room_id} status is {room['status']}")
+        return {'success': False, 'message': f'Room status is {room["status"]}'}
     
+    # Allow joining
     room['status'] = 'occupied'
     room['joinedBy'] = sid
     
     join_room(room_id)
     _track_user_room(sid, room_id)
     
+    # Notify the creator that someone joined
     emit('peer_joined', {'metadata': data.get('metadata', {})}, to=room_id, include_self=False)
     
-    print(f"[Server] Client {sid[:8]} joined private room {room_id[:8]}")
+    print(f"[Server] Client {sid[:8]} SUCCESSFULLY joined room {room_id[:8]}")
     return {'success': True, 'offer': room['offer'], 'metadata': room['metadata']}
 
 
