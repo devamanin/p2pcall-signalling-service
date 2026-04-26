@@ -527,34 +527,26 @@ def handle_create_private_room(data):
 
 @socketio.on('join_private_room')
 def handle_join_private_room(data):
-    room_id = data.get('room_id')
+    room_id = str(data.get('room_id', '')).strip()
     sid = request.sid
     print(f"[Server] Client {sid[:8]} ATTEMPTING to join private room: {room_id}")
     
     if not room_id:
-        print(f"[Server] Private Join FAILED: No room_id provided in data: {data}")
+        print(f"[Server] Private Join FAILED: No room_id provided")
         return {'success': False, 'message': 'No room_id provided'}
 
     if room_id not in rooms:
-        # Check for case sensitivity or whitespace
-        room_id_str = str(room_id).strip()
-        if room_id_str in rooms:
-             room_id = room_id_str
-        else:
-             active_rooms = list(rooms.keys())
-             print(f"[Server] Private Join FAILED: room {room_id} not found. Active rooms: {active_rooms}")
-             return {'success': False, 'message': f'Room {room_id} not found. Active count: {len(active_rooms)}'}
+        active_rooms = list(rooms.keys())
+        print(f"[Server] Private Join FAILED: room {room_id} not found. Active rooms: {active_rooms}")
+        return {'success': False, 'message': f'Room not found on server. Active count: {len(active_rooms)}'}
     
     room = rooms[room_id]
     
-    # Debug: log room state
-    print(f"[Server] Found room {room_id[:8]}: status={room['status']}, creator={room['createdBy'][:8]}")
-
-    if room['status'] != 'private' and room['status'] != 'occupied':
-        print(f"[Server] Private Join FAILED: room {room_id} status is {room['status']}")
+    # Allow joining if private or if already occupied (re-join)
+    if room['status'] not in ['private', 'occupied']:
+        print(f"[Server] Private Join FAILED: room {room_id[:8]} status is {room['status']}")
         return {'success': False, 'message': f'Room status is {room["status"]}'}
     
-    # Allow joining
     room['status'] = 'occupied'
     room['joinedBy'] = sid
     
