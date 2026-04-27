@@ -1,5 +1,5 @@
-import eventlet
-eventlet.monkey_patch()
+import gevent.monkey
+gevent.monkey.patch_all()
 
 from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -13,8 +13,8 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 
 app = Flask(__name__)
-# Using eventlet for production compatibility with gunicorn on Render
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Using gevent for production compatibility with gunicorn on Render
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 
 # Initialize Firebase Admin
 service_account_info = os.environ.get('FIREBASE_SERVICE_ACCOUNT')
@@ -47,7 +47,7 @@ else:
 
 
 def _get_fcm_token_via_rest(target_uid):
-    """Fetch a user's FCM token via Firestore REST API (avoids gRPC/eventlet conflicts)."""
+    """Fetch a user's FCM token via Firestore REST API (avoids gRPC/gevent conflicts)."""
     if not _firebase_project_id or not firebase_app:
         return None
     try:
