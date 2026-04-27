@@ -613,7 +613,11 @@ def handle_leave_room(data):
     _untrack_user_room(sid, room_id)
     
     if room_id in rooms:
-        _destroy_room(room_id, reason=f"leave by {sid[:8]}")
+        room = rooms[room_id]
+        if room.get('createdBy') == sid or room.get('joinedBy') == sid:
+            _destroy_room(room_id, reason=f"leave by {sid[:8]}")
+        else:
+            print(f"[Server] Client {sid[:8]} left room {room_id[:8]} but is not a participant. Keeping room alive.")
 
 
 @app.route('/admob-reward', methods=['GET'])
