@@ -108,7 +108,10 @@ def _get_region_from_location(location_str):
     return None
 
 # Max age for a 'waiting' room before it's considered stale (seconds)
-STALE_ROOM_TTL = 30
+STALE_ROOM_TTL = 60
+
+# Max age for a 'private' room that hasn't been joined yet
+PRIVATE_ROOM_TTL = 600 # 10 minutes
 
 ICE_SERVERS = {
     "iceServers": [
@@ -184,23 +187,21 @@ def _cleanup_user_rooms(sid, keep_room_id=None):
 
 
 def _purge_stale_rooms():
-    """Remove waiting rooms that are older than STALE_ROOM_TTL."""
+    """Remove rooms that are older than their respective TTLs."""
     now = time.time()
     stale = []
     for room_id, room in rooms.items():
         if room['status'] == 'waiting' and (now - room.get('createdAt', 0)) > STALE_ROOM_TTL:
             stale.append(room_id)
+        elif room['status'] == 'private' and (now - room.get('createdAt', 0)) > PRIVATE_ROOM_TTL:
+            stale.append(room_id)
     
     for rid in stale:
         if rid in rooms:
             print(f"[Server] Purging stale room {rid[:8]}... (age: {now - rooms[rid].get('createdAt', 0):.0f}s)")
-            creator = rooms[rid].get('createdBy')
-            if creator:
-                _untrack_user_room(creator, rid)
-            del rooms[rid]
-    
-    if stale:
-        print(f"[Server] Purged {len(stale)} stale rooms. Active rooms: {len(rooms)}")
+            _destroy_room(rid, reason="stale_room_purged")
+
+    if stale:        print(f"[Server] Purged {len(stale)} stale rooms. Active rooms: {len(rooms)}")
 
 
 @socketio.on('get_ice_servers')
@@ -219,22 +220,32 @@ def handle_disconnect():
     sid = request.sid
     print(f"[Server] Client disconnected: {sid[:8]}")
     
-    # Clean up ALL rooms this user was in (as creator or joiner)
+    # Clean up rooms this user was in
     if sid in user_rooms:
         room_ids = list(user_rooms[sid])
         for room_id in room_ids:
             if room_id in rooms:
                 room = rooms[room_id]
+                
+                # If it's a private room, do NOT destroy it instantly.
+                # Mobile sockets flicker, and User A needs the room to stay alive while User B joins.
+                if room['status'] in ['private', 'occupied']:
+                    print(f"[Server] Client {sid[:8]} disconnected from private room {room_id[:8]}. Keeping room alive.")
+                    leave_room(room_id)
+                    # Notify the other person if the room is occupied
+                    emit('peer_disconnected', {'sid': sid}, to=room_id, include_self=False)
+                    continue
+
+                # For random matching rooms, destroy instantly
                 print(f"[Server] Cleaning room {room_id[:8]} due to disconnect of {sid[:8]} "
                       f"(role={'creator' if room['createdBy'] == sid else 'joiner'})")
                 leave_room(room_id)
                 _destroy_room(room_id, reason="participant_disconnected")
         
-        # Final cleanup of tracking
+        # Final cleanup of tracking association for this specific SID
         if sid in user_rooms:
             del user_rooms[sid]
-        if sid in previous_matches:
-            del previous_matches[sid]
+        # We don't delete from previous_matches here as that's used for matching logic
 
 @socketio.on('notify_call')
 def handle_notify_call(data):
