@@ -1,6 +1,7 @@
 flask
 flask-socketio
 gunicorn
-eventlet
+gevent
+gevent-websocket
 requests
 firebase-admin
