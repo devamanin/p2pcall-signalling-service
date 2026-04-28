@@ -419,32 +419,21 @@ def handle_find_room(data):
             if my_physical_region not in creator_location_filters:
                 continue
 
-        # 4. Interests Matching (Hard requirement if either party has selected specific interests)
+        # 4. Interests Matching (Preference/Soft requirement)
         my_interests = my_metadata.get('interests', [])
         room_interests = room_meta.get('interests', [])
         
-        # If I have interests, creator MUST share at least one
-        if my_interests:
-            shared = set(my_interests).intersection(set(room_interests))
-            if not shared:
-                continue
-                
-        # If creator has interests, I MUST share at least one
-        if room_interests:
-            shared = set(my_interests).intersection(set(room_interests))
-            if not shared:
-                continue
-
         # Calculate Match Score (Soft requirements)
         score = 0
         
-        # Shared interests bonus
-        shared_count = len(set(my_interests).intersection(set(room_interests)))
-        score += shared_count * 10
+        # Shared interests bonus (High priority)
+        if my_interests and room_interests:
+            shared_count = len(set(my_interests).intersection(set(room_interests)))
+            score += shared_count * 20 # Significant boost for shared interests
         
         # Exact Location bonus
         if my_metadata.get('location') == room_meta.get('location') and my_metadata.get('location') != 'Global':
-            score += 15
+            score += 10
             
         candidates.append({
             'room_id': room_id,
@@ -640,11 +629,26 @@ def handle_leave_room(data):
     sid = request.sid
     print(f"[Server] Client {sid[:8]} leaving room {room_id[:8]}")
     
-    leave_room(room_id)
-    _untrack_user_room(sid, room_id)
-    
     if room_id in rooms:
         _destroy_room(room_id, reason=f"leave by {sid[:8]}")
+    else:
+        # Fallback if room already gone but socket still in room
+        leave_room(room_id)
+        _untrack_user_room(sid, room_id)
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    sid = request.sid
+    print(f"[Server] Client disconnected: {sid[:8]}")
+    
+    if sid in user_rooms:
+        rooms_to_cleanup = list(user_rooms[sid])
+        for room_id in rooms_to_cleanup:
+            if room_id in rooms:
+                _destroy_room(room_id, reason="peer_disconnected")
+            else:
+                _untrack_user_room(sid, room_id)
 
 
 @app.route('/admob-reward', methods=['GET'])
