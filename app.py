@@ -87,25 +87,28 @@ rooms_lock = threading.Lock()
 
 # Region mapping for absolute location matching
 REGION_MAP = {
-    'North America': ['USA', 'Canada', 'Mexico', 'United States'],
-    'Europe': ['UK', 'United Kingdom', 'France', 'Germany', 'Italy', 'Spain', 'Netherlands', 'Sweden', 'Norway', 'Denmark', 'Ireland', 'Switzerland', 'Austria', 'Belgium', 'Poland', 'Portugal'],
-    'Asia': ['India', 'Japan', 'China', 'South Korea', 'Singapore', 'Thailand', 'Vietnam', 'Indonesia', 'Malaysia', 'Philippines', 'Pakistan', 'Bangladesh', 'Sri Lanka'],
+    'North America': ['USA', 'Canada', 'Mexico', 'United States', 'US'],
+    'Europe': ['UK', 'United Kingdom', 'France', 'Germany', 'Italy', 'Spain', 'Netherlands', 'Sweden', 'Norway', 'Denmark', 'Ireland', 'Switzerland', 'Austria', 'Belgium', 'Poland', 'Portugal', 'Russia'],
+    'Asia': ['India', 'Japan', 'China', 'South Korea', 'Singapore', 'Thailand', 'Vietnam', 'Indonesia', 'Malaysia', 'Philippines', 'Pakistan', 'Bangladesh', 'Sri Lanka', 'UAE', 'Saudi Arabia', 'Israel'],
     'South America': ['Brazil', 'Argentina', 'Colombia', 'Peru', 'Chile', 'Ecuador', 'Venezuela', 'Bolivia', 'Paraguay', 'Uruguay'],
-    'Oceania': ['Australia', 'New Zealand', 'Fiji', 'Papua New Guinea']
+    'Oceania': ['Australia', 'New Zealand', 'Fiji', 'Papua New Guinea'],
+    'Africa': ['Nigeria', 'Egypt', 'South Africa', 'Kenya', 'Morocco', 'Ethiopia', 'Ghana']
 }
 
 def _get_region_from_location(location_str):
     """Determine the region from a 'City, Country' string."""
     if not location_str or location_str == 'Global':
-        return None
+        return 'Global'
     
     # Extract country name (usually after the comma)
-    country = location_str.split(',')[-1].strip()
+    country = location_str.split(',')[-1].strip().lower()
     
     for region, countries in REGION_MAP.items():
-        if any(c.lower() in country.lower() for c in countries):
-            return region
-    return None
+        for c in countries:
+            c_low = c.lower()
+            if c_low == country or c_low in country or country in c_low:
+                return region
+    return 'Global'
 
 # Max age for a 'waiting' room before it's considered stale (seconds)
 STALE_ROOM_TTL = 60
@@ -401,32 +404,47 @@ def handle_find_room(data):
                 continue
         
         # 3. Absolute Location Matching (Hard requirement)
-        # Check if searching User A is okay with User B's physical region
         my_location_filters = my_metadata.get('locations', ['Global'])
+        creator_physical_region = _get_region_from_location(room_meta.get('location'))
+        
+        # If I have a specific filter, the creator MUST be in that region
         if 'Global' not in my_location_filters:
-            creator_physical_region = _get_region_from_location(room_meta.get('location'))
             if creator_physical_region not in my_location_filters:
                 continue
         
-        # Check if room creator User B is okay with User A's physical region
+        # Check if room creator is okay with my physical region
         creator_location_filters = room_meta.get('locations', ['Global'])
+        my_physical_region = _get_region_from_location(my_metadata.get('location'))
         if 'Global' not in creator_location_filters:
-            my_physical_region = _get_region_from_location(my_metadata.get('location'))
             if my_physical_region not in creator_location_filters:
+                continue
+
+        # 4. Interests Matching (Hard requirement if either party has selected specific interests)
+        my_interests = my_metadata.get('interests', [])
+        room_interests = room_meta.get('interests', [])
+        
+        # If I have interests, creator MUST share at least one
+        if my_interests:
+            shared = set(my_interests).intersection(set(room_interests))
+            if not shared:
+                continue
+                
+        # If creator has interests, I MUST share at least one
+        if room_interests:
+            shared = set(my_interests).intersection(set(room_interests))
+            if not shared:
                 continue
 
         # Calculate Match Score (Soft requirements)
         score = 0
         
-        # 1. Interests (High priority)
-        my_interests = set(my_metadata.get('interests', []))
-        room_interests = set(room_meta.get('interests', []))
-        shared_interests = my_interests.intersection(room_interests)
-        score += len(shared_interests) * 10
+        # Shared interests bonus
+        shared_count = len(set(my_interests).intersection(set(room_interests)))
+        score += shared_count * 10
         
-        # 2. Location (Medium priority)
+        # Exact Location bonus
         if my_metadata.get('location') == room_meta.get('location') and my_metadata.get('location') != 'Global':
-            score += 5
+            score += 15
             
         candidates.append({
             'room_id': room_id,
