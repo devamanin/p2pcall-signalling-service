@@ -365,8 +365,9 @@ def handle_find_room(data):
     
     print(f"[Server] User {sid[:8]} searching. Active rooms: {len(rooms)}")
     
+    my_client_id = my_metadata.get('client_id')
     # Get last partner to avoid immediate re-match
-    last_partner = previous_matches.get(sid)
+    last_partner = previous_matches.get(my_client_id) if my_client_id else previous_matches.get(sid)
     
     candidates = []
 
@@ -374,13 +375,18 @@ def handle_find_room(data):
         # Must be waiting, not created by me, and not stale
         if room['status'] != 'waiting':
             continue
-        if room['createdBy'] == sid:
+        
+        room_creator_client_id = room.get('metadata', {}).get('client_id')
+        if room['createdBy'] == sid or (room_creator_client_id and room_creator_client_id == my_client_id):
             continue
+            
         if (now - room.get('createdAt', 0)) > STALE_ROOM_TTL:
             continue
             
         # Anti-repeat check
-        if room['createdBy'] == last_partner:
+        if room_creator_client_id and room_creator_client_id == last_partner:
+            continue
+        elif not room_creator_client_id and room['createdBy'] == last_partner:
             continue
 
         room_meta = room.get('metadata', {})
@@ -501,9 +507,16 @@ def handle_join_room(data):
     room['joinedBy'] = sid
     
     # Track as previous match for both parties
-    creator_sid = room['createdBy']
-    previous_matches[sid] = creator_sid
-    previous_matches[creator_sid] = sid
+    creator_client_id = room.get('metadata', {}).get('client_id')
+    my_client_id = data.get('metadata', {}).get('client_id')
+    
+    if my_client_id and creator_client_id:
+        previous_matches[my_client_id] = creator_client_id
+        previous_matches[creator_client_id] = my_client_id
+    else:
+        creator_sid = room['createdBy']
+        previous_matches[sid] = creator_sid
+        previous_matches[creator_sid] = sid
     
     join_room(room_id)
     _track_user_room(sid, room_id)
@@ -613,11 +626,7 @@ def handle_leave_room(data):
     _untrack_user_room(sid, room_id)
     
     if room_id in rooms:
-        room = rooms[room_id]
-        if room.get('createdBy') == sid or room.get('joinedBy') == sid:
-            _destroy_room(room_id, reason=f"leave by {sid[:8]}")
-        else:
-            print(f"[Server] Client {sid[:8]} left room {room_id[:8]} but is not a participant. Keeping room alive.")
+        _destroy_room(room_id, reason=f"leave by {sid[:8]}")
 
 
 @app.route('/admob-reward', methods=['GET'])
