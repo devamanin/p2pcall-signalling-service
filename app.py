@@ -404,6 +404,12 @@ def handle_find_room(data):
 
         room_meta = room.get('metadata', {})
         
+        # Match Mode matching (Hard requirement)
+        my_match_mode = my_metadata.get('matchMode', 'virtual')
+        room_match_mode = room_meta.get('matchMode', 'virtual')
+        if my_match_mode != room_match_mode:
+            continue
+        
         # Gender matching (Hard requirement)
         if my_metadata.get('targetGender') != 'Any Gender':
             if room_meta.get('myGender') != my_metadata.get('targetGender'):
