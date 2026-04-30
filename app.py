@@ -95,6 +95,16 @@ REGION_MAP = {
     'Africa': ['Nigeria', 'Egypt', 'South Africa', 'Kenya', 'Morocco', 'Ethiopia', 'Ghana']
 }
 
+def haversine(lat1, lon1, lat2, lon2):
+    if lat1 is None or lon1 is None or lat2 is None or lon2 is None:
+        return float('inf')
+    R = 6371.0 # Earth radius in kilometers
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    a = math.sin(dLat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
 def _get_region_from_location(location_str):
     """Determine the region from a 'City, Country' string."""
     if not location_str or location_str == 'Global':
@@ -426,6 +436,17 @@ def handle_find_room(data):
         # Calculate Match Score (Soft requirements)
         score = 0
         
+        # Distance calculation
+        distance = float('inf')
+        match_mode = my_metadata.get('matchMode', 'virtual')
+        
+        if match_mode == 'real' or room_meta.get('matchMode') == 'real':
+            my_lat = my_metadata.get('latitude')
+            my_lon = my_metadata.get('longitude')
+            room_lat = room_meta.get('latitude')
+            room_lon = room_meta.get('longitude')
+            distance = haversine(my_lat, my_lon, room_lat, room_lon)
+        
         # Shared interests bonus (High priority)
         if my_interests and room_interests:
             shared_count = len(set(my_interests).intersection(set(room_interests)))
@@ -438,6 +459,7 @@ def handle_find_room(data):
         candidates.append({
             'room_id': room_id,
             'score': score,
+            'distance': distance,
             'createdAt': room.get('createdAt', 0)
         })
 
@@ -447,7 +469,12 @@ def handle_find_room(data):
         
     # Sort by score (descending) and then by age (oldest first)
     # This ensures "Magic Matches" are picked first, but fallback happens naturally
-    candidates.sort(key=lambda x: (x['score'], -x['createdAt']), reverse=True)
+    if my_metadata.get('matchMode') == 'real':
+        # For real mode, sort primarily by distance (ascending), then score (descending), then age (oldest first)
+        candidates.sort(key=lambda x: (x['distance'], -x['score'], -x['createdAt']))
+    else:
+        # For virtual mode, sort by score (descending), then age (oldest first)
+        candidates.sort(key=lambda x: (-x['score'], -x['createdAt']))
     
     best_match = candidates[0]
     print(f"[Server] Best match for {sid[:8]} is {best_match['room_id'][:8]} with score {best_match['score']}")
