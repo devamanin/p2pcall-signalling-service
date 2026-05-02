@@ -397,11 +397,12 @@ def handle_find_room(data):
         if (now - room.get('createdAt', 0)) > STALE_ROOM_TTL:
             continue
             
-        # Anti-repeat check
+        # Anti-repeat check (Penalize score instead of skipping to allow matching if only 2 users)
+        is_previous_match = False
         if room_creator_client_id and room_creator_client_id == last_partner:
-            continue
+            is_previous_match = True
         elif not room_creator_client_id and room['createdBy'] == last_partner:
-            continue
+            is_previous_match = True
 
         room_meta = room.get('metadata', {})
         
@@ -442,6 +443,10 @@ def handle_find_room(data):
         
         # Calculate Match Score (Soft requirements)
         score = 0
+        
+        if is_previous_match:
+            score -= 1000
+
         
         # Distance calculation
         distance = float('inf')
