@@ -127,32 +127,20 @@ STALE_ROOM_TTL = 60
 # Max age for a 'private' room that hasn't been joined yet
 PRIVATE_ROOM_TTL = 600 # 10 minutes
 
-# ICE_SERVERS = {"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","stun:stun.cloudflare.com:53"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp","turn:turn.cloudflare.com:53?transport=udp","turn:turn.cloudflare.com:80?transport=tcp","turns:turn.cloudflare.com:443?transport=tcp"],"username":"g0e86ec05b94407fb8406184609716f2a5196dee9125367456a0f73dc5516aa8","credential":"c4d78514269bce94108fbc7cc080eea6b060fcc92aabc18cc97e74e226829f4b"}]}
+# STATIC FALLBACK ICE SERVERS — Used when Cloudflare dynamic API is unavailable.
+# NOTE: Cloudflare TURN does NOT support static credentials. Only STUN works statically.
+# For TURN relay, we rely on dynamic Cloudflare credentials or Metered.ca.
+METERED_API_KEY = os.environ.get("METERED_API_KEY", "")
+METERED_APP_NAME = os.environ.get("METERED_APP_NAME", "p2pcall")
+
 ICE_SERVERS = {
   "iceServers": [
     {
-      "urls": ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"]
-    },
-    {
-      # Your Cloudflare TURN
       "urls": [
-        "turn:turn.cloudflare.com:3478?transport=udp",
-        "turn:turn.cloudflare.com:3478?transport=tcp",
-        "turns:turn.cloudflare.com:443?transport=tcp"
-      ],
-      "username": "g0e86ec05b94407fb8406184609716f2a5196dee9125367456a0f73dc5516aa8",
-      "credential": "c4d78514269bce94108fbc7cc080eea6b060fcc92aabc18cc97e74e226829f4b"
-    },
-    {
-      # BACKUP PUBLIC TURN SERVER (Metered)
-      "urls": [
-        "turn:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp"
-      ],
-      "username": "openrelayproject",
-      "credential": "openrelayproject",
-      "credentialType": "password"
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302",
+        "stun:stun.cloudflare.com:3478"
+      ]
     }
   ]
 }
@@ -164,82 +152,110 @@ TURN_API_TOKEN = os.environ.get("CLOUDFLARE_TURN_API_TOKEN")
 CACHED_ICE_SERVERS = None
 CACHED_ICE_EXPIRY = 0
 
+
+def _fetch_metered_turn_servers():
+    """Fetch TURN credentials from Metered.ca REST API (free tier)."""
+    if not METERED_API_KEY:
+        return []
+    try:
+        url = f"https://{METERED_APP_NAME}.metered.live/api/v1/turn/credentials?apiKey={METERED_API_KEY}"
+        resp = http_requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            servers = resp.json()
+            print(f"[Server] Metered.ca returned {len(servers)} TURN servers")
+            return servers
+        else:
+            print(f"[Server] Metered.ca API error: {resp.status_code}")
+            return []
+    except Exception as e:
+        print(f"[Server] Metered.ca fetch error: {e}")
+        return []
+
+
 def get_dynamic_ice_servers():
     global CACHED_ICE_SERVERS, CACHED_ICE_EXPIRY
     
     # Use cached credentials if valid
     now = time.time()
     if CACHED_ICE_SERVERS and now < CACHED_ICE_EXPIRY:
-        print("[Server] Returning cached Cloudflare TURN credentials.")
+        print("[Server] Returning cached TURN credentials.")
         return CACHED_ICE_SERVERS
-        
-    # If no API keys are provided, fallback to the static dictionary
-    if not TURN_KEY_ID or not TURN_API_TOKEN:
-        print("[Server] Warning: CLOUDFLARE_TURN_KEY_ID or API_TOKEN not set! Falling back to static ICE_SERVERS.")
-        return ICE_SERVERS
-        
-    try:
-        print("[Server] Generating fresh Cloudflare TURN credentials...")
-        url = f"https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate-ice-servers"
-        headers = {
-            "Authorization": f"Bearer {TURN_API_TOKEN}",
-            "Content-Type": "application/json"
+    
+    ice_servers_list = [
+        {
+            "urls": [
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302",
+                "stun:stun.cloudflare.com:3478"
+            ]
         }
-        # TTL is 24 hours
-        payload = {"ttl": 86400}
-        
-        response = http_requests.post(url, headers=headers, json=payload, timeout=5)
-        
-        if response.status_code in [200, 201]:
-            data = response.json()
-            
-            # Extract iceServers array from response
-            ice_servers_data = []
-            if 'result' in data and 'iceServers' in data['result']:
-                ice_servers_data = data['result']['iceServers']
-            elif 'iceServers' in data:
-                ice_servers_data = data['iceServers']
-            else:
-                ice_servers_data = [data] # fallback
-                
-            # Ensure it's a list (Cloudflare sometimes returns a single object instead of an array)
-            if isinstance(ice_servers_data, dict):
-                ice_servers_list = [ice_servers_data]
-            elif isinstance(ice_servers_data, list):
-                ice_servers_list = list(ice_servers_data)
-            else:
-                ice_servers_list = []
-                
-            # Add Google STUN as fallback
-            ice_servers_list.insert(0, {
-                "urls": ["stun:stun.l.google.com:19302"]
-            })
-            
-            # Add OpenRelay as fallback for restrictive networks like Jio
-            ice_servers_list.append({
-                "urls": [
-                    "turn:openrelay.metered.ca:80",
-                    "turn:openrelay.metered.ca:443",
-                    "turn:openrelay.metered.ca:443?transport=tcp"
-                ],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-                "credentialType": "password"
-            })
-            
-            CACHED_ICE_SERVERS = {
-                "iceServers": ice_servers_list
+    ]
+    
+    got_turn = False
+    
+    # --- Strategy 1: Cloudflare Dynamic TURN ---
+    if TURN_KEY_ID and TURN_API_TOKEN:
+        try:
+            print("[Server] Generating fresh Cloudflare TURN credentials...")
+            url = f"https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate-ice-servers"
+            headers = {
+                "Authorization": f"Bearer {TURN_API_TOKEN}",
+                "Content-Type": "application/json"
             }
-            # Cache for 12 hours (half of the TTL)
-            CACHED_ICE_EXPIRY = now + (86400 / 2) 
-            return CACHED_ICE_SERVERS
-        else:
-            print(f"[Server] Failed to generate TURN credentials: {response.status_code} - {response.text}")
-            return ICE_SERVERS
+            # TTL is 24 hours
+            payload = {"ttl": 86400}
             
-    except Exception as e:
-        print(f"[Server] Error fetching TURN credentials: {e}")
-        return ICE_SERVERS
+            response = http_requests.post(url, headers=headers, json=payload, timeout=5)
+            
+            if response.status_code in [200, 201]:
+                data = response.json()
+                
+                # Extract iceServers array from response
+                ice_servers_data = []
+                if 'result' in data and 'iceServers' in data['result']:
+                    ice_servers_data = data['result']['iceServers']
+                elif 'iceServers' in data:
+                    ice_servers_data = data['iceServers']
+                else:
+                    ice_servers_data = [data]
+                    
+                # Ensure it's a list
+                if isinstance(ice_servers_data, dict):
+                    ice_servers_data = [ice_servers_data]
+                elif not isinstance(ice_servers_data, list):
+                    ice_servers_data = []
+                
+                if ice_servers_data:
+                    ice_servers_list.extend(ice_servers_data)
+                    got_turn = True
+                    print(f"[Server] ✓ Cloudflare TURN: {len(ice_servers_data)} servers added")
+            else:
+                print(f"[Server] ✗ Cloudflare TURN failed: {response.status_code} - {response.text[:200]}")
+                
+        except Exception as e:
+            print(f"[Server] ✗ Cloudflare TURN error: {e}")
+    else:
+        print("[Server] Cloudflare TURN keys not set, skipping.")
+    
+    # --- Strategy 2: Metered.ca TURN (backup / always added for Jio-like networks) ---
+    metered_servers = _fetch_metered_turn_servers()
+    if metered_servers:
+        ice_servers_list.extend(metered_servers)
+        got_turn = True
+        print(f"[Server] ✓ Metered.ca TURN: {len(metered_servers)} servers added")
+    
+    if not got_turn:
+        print("[Server] ⚠ WARNING: No TURN servers available! Connections on restrictive networks will fail.")
+        print("[Server]   Set CLOUDFLARE_TURN_KEY_ID + CLOUDFLARE_TURN_API_TOKEN or METERED_API_KEY")
+    
+    CACHED_ICE_SERVERS = {
+        "iceServers": ice_servers_list
+    }
+    # Cache for 6 hours (Cloudflare TTL is 24h, Metered credentials are long-lived)
+    CACHED_ICE_EXPIRY = now + (6 * 3600)
+    
+    print(f"[Server] ICE config ready: {len(ice_servers_list)} server entries (hasTURN={got_turn})")
+    return CACHED_ICE_SERVERS
 
 
 
@@ -811,6 +827,24 @@ def health_check():
     waiting = sum(1 for r in rooms.values() if r['status'] == 'waiting')
     occupied = sum(1 for r in rooms.values() if r['status'] == 'occupied')
     return f"OK | rooms: {active} (waiting: {waiting}, occupied: {occupied})", 200
+
+
+@app.route('/ice-check', methods=['GET'])
+def ice_check():
+    """Diagnostic endpoint: returns the current ICE server configuration."""
+    config = get_dynamic_ice_servers()
+    has_turn = any(
+        any(u.startswith('turn') for u in (s.get('urls') or [s.get('url', '')]))
+        for s in config.get('iceServers', [])
+        if isinstance(s.get('urls'), list) or s.get('url')
+    )
+    return {
+        'has_turn': has_turn,
+        'cloudflare_configured': bool(TURN_KEY_ID and TURN_API_TOKEN),
+        'metered_configured': bool(METERED_API_KEY),
+        'server_count': len(config.get('iceServers', [])),
+        'iceServers': config.get('iceServers', [])
+    }, 200
 
 
 if __name__ == '__main__':
