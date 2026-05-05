@@ -165,10 +165,12 @@ def get_dynamic_ice_servers():
     # Use cached credentials if valid
     now = time.time()
     if CACHED_ICE_SERVERS and now < CACHED_ICE_EXPIRY:
+        print("[Server] Returning cached Cloudflare TURN credentials.")
         return CACHED_ICE_SERVERS
         
     # If no API keys are provided, fallback to the static dictionary
     if not TURN_KEY_ID or not TURN_API_TOKEN:
+        print("[Server] Warning: CLOUDFLARE_TURN_KEY_ID or API_TOKEN not set! Falling back to static ICE_SERVERS.")
         return ICE_SERVERS
         
     try:
