@@ -194,22 +194,41 @@ def get_dynamic_ice_servers():
             data = response.json()
             
             # Extract iceServers array from response
-            ice_servers_list = []
+            ice_servers_data = []
             if 'result' in data and 'iceServers' in data['result']:
-                ice_servers_list = data['result']['iceServers']
+                ice_servers_data = data['result']['iceServers']
             elif 'iceServers' in data:
-                ice_servers_list = data['iceServers']
+                ice_servers_data = data['iceServers']
             else:
-                ice_servers_list = [data] # fallback
+                ice_servers_data = [data] # fallback
+                
+            # Ensure it's a list (Cloudflare sometimes returns a single object instead of an array)
+            if isinstance(ice_servers_data, dict):
+                ice_servers_list = [ice_servers_data]
+            elif isinstance(ice_servers_data, list):
+                ice_servers_list = list(ice_servers_data)
+            else:
+                ice_servers_list = []
                 
             # Add Google STUN as fallback
             ice_servers_list.insert(0, {
                 "urls": ["stun:stun.l.google.com:19302"]
             })
             
+            # Add OpenRelay as fallback for restrictive networks like Jio
+            ice_servers_list.append({
+                "urls": [
+                    "turn:openrelay.metered.ca:80",
+                    "turn:openrelay.metered.ca:443",
+                    "turn:openrelay.metered.ca:443?transport=tcp"
+                ],
+                "username": "openrelayproject",
+                "credential": "openrelayproject",
+                "credentialType": "password"
+            })
+            
             CACHED_ICE_SERVERS = {
-                "iceServers": ice_servers_list,
-                "iceCandidatePoolSize": 10
+                "iceServers": ice_servers_list
             }
             # Cache for 12 hours (half of the TTL)
             CACHED_ICE_EXPIRY = now + (86400 / 2) 
