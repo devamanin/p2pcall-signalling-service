@@ -130,8 +130,8 @@ PRIVATE_ROOM_TTL = 600 # 10 minutes
 # STATIC FALLBACK ICE SERVERS — Used when Cloudflare dynamic API is unavailable.
 # NOTE: Cloudflare TURN does NOT support static credentials. Only STUN works statically.
 # For TURN relay, we rely on dynamic Cloudflare credentials or Metered.ca.
-METERED_API_KEY = os.environ.get("METERED_API_KEY", "")
-METERED_APP_NAME = os.environ.get("METERED_APP_NAME", "p2pcall")
+METERED_API_KEY = os.environ.get("METERED_API_KEY", "f3f1320172314cd949447975926f077348b8")
+METERED_APP_NAME = os.environ.get("METERED_APP_NAME", "blynqp2p")
 
 ICE_SERVERS = {
   "iceServers": [
