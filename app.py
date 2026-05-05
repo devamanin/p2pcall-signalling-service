@@ -132,7 +132,7 @@ ICE_SERVERS = {
       {
         "urls": [
           "stun:stun.cloudflare.com:3478",
-          "stun:stun.cloudflare.com:53",
+          "stun:stun.l.google.com:19302",
         ],
       },
       {
@@ -144,11 +144,77 @@ ICE_SERVERS = {
           "turn:turn.cloudflare.com:80?transport=tcp",
           "turns:turn.cloudflare.com:443?transport=tcp",
         ],
-        "username": "g0d1c991d1988319f2a1e57d8407530631be587513304980f222bbe90f879da5",
-        "credential": "0308d1e94c15c822aa900cdae2fd2eaa2ffe42ab0123ca49978e86f72e1a9f6d",
+        "username": "YOUR_TURN_USERNAME",
+        "credential": "YOUR_TURN_CREDENTIAL",
+        "credentialType": "password"
       },
     ],
+    "iceCandidatePoolSize": 10
 }
+
+# --- Cloudflare Dynamic TURN Credentials ---
+TURN_KEY_ID = os.environ.get("CLOUDFLARE_TURN_KEY_ID")
+TURN_API_TOKEN = os.environ.get("CLOUDFLARE_TURN_API_TOKEN")
+
+CACHED_ICE_SERVERS = None
+CACHED_ICE_EXPIRY = 0
+
+def get_dynamic_ice_servers():
+    global CACHED_ICE_SERVERS, CACHED_ICE_EXPIRY
+    
+    # Use cached credentials if valid
+    now = time.time()
+    if CACHED_ICE_SERVERS and now < CACHED_ICE_EXPIRY:
+        return CACHED_ICE_SERVERS
+        
+    # If no API keys are provided, fallback to the static dictionary
+    if not TURN_KEY_ID or not TURN_API_TOKEN:
+        return ICE_SERVERS
+        
+    try:
+        print("[Server] Generating fresh Cloudflare TURN credentials...")
+        url = f"https://rtc.live.cloudflare.com/v1/turn/keys/{TURN_KEY_ID}/credentials/generate-ice-servers"
+        headers = {
+            "Authorization": f"Bearer {TURN_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        # TTL is 24 hours
+        payload = {"ttl": 86400}
+        
+        response = http_requests.post(url, headers=headers, json=payload, timeout=5)
+        
+        if response.status_code in [200, 201]:
+            data = response.json()
+            
+            # Extract iceServers array from response
+            ice_servers_list = []
+            if 'result' in data and 'iceServers' in data['result']:
+                ice_servers_list = data['result']['iceServers']
+            elif 'iceServers' in data:
+                ice_servers_list = data['iceServers']
+            else:
+                ice_servers_list = [data] # fallback
+                
+            # Add Google STUN as fallback
+            ice_servers_list.insert(0, {
+                "urls": ["stun:stun.l.google.com:19302"]
+            })
+            
+            CACHED_ICE_SERVERS = {
+                "iceServers": ice_servers_list,
+                "iceCandidatePoolSize": 10
+            }
+            # Cache for 12 hours (half of the TTL)
+            CACHED_ICE_EXPIRY = now + (86400 / 2) 
+            return CACHED_ICE_SERVERS
+        else:
+            print(f"[Server] Failed to generate TURN credentials: {response.status_code} - {response.text}")
+            return ICE_SERVERS
+            
+    except Exception as e:
+        print(f"[Server] Error fetching TURN credentials: {e}")
+        return ICE_SERVERS
+
 
 
 def _track_user_room(sid, room_id):
@@ -221,7 +287,7 @@ def _purge_stale_rooms():
 @socketio.on('get_ice_servers')
 def handle_get_ice_servers(data):
     print(f"ICE servers requested by {request.sid[:8]}")
-    return ICE_SERVERS
+    return get_dynamic_ice_servers()
 
 
 @socketio.on('connect')
