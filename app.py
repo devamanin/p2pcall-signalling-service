@@ -131,21 +131,19 @@ ICE_SERVERS = {
     "iceServers": [
       {
         "urls": [
-          "stun:stun.cloudflare.com:3478",
           "stun:stun.l.google.com:19302",
+          "stun:stun1.l.google.com:19302",
+          "stun:stun2.l.google.com:19302",
         ],
       },
       {
         "urls": [
-          "turn:turn.cloudflare.com:3478?transport=udp",
-          "turn:turn.cloudflare.com:3478?transport=tcp",
-          "turns:turn.cloudflare.com:5349?transport=tcp",
-          "turn:turn.cloudflare.com:53?transport=udp",
-          "turn:turn.cloudflare.com:80?transport=tcp",
-          "turns:turn.cloudflare.com:443?transport=tcp",
+          "turn:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:443",
+          "turn:openrelay.metered.ca:443?transport=tcp",
         ],
-        "username": "YOUR_TURN_USERNAME",
-        "credential": "YOUR_TURN_CREDENTIAL",
+        "username": "openrelayproject",
+        "credential": "openrelayproject",
         "credentialType": "password"
       },
     ],
