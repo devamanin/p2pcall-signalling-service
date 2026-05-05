@@ -127,28 +127,7 @@ STALE_ROOM_TTL = 60
 # Max age for a 'private' room that hasn't been joined yet
 PRIVATE_ROOM_TTL = 600 # 10 minutes
 
-ICE_SERVERS = {
-    "iceServers": [
-      {
-        "urls": [
-          "stun:stun.l.google.com:19302",
-          "stun:stun1.l.google.com:19302",
-          "stun:stun2.l.google.com:19302",
-        ],
-      },
-      {
-        "urls": [
-          "turn:openrelay.metered.ca:80",
-          "turn:openrelay.metered.ca:443",
-          "turn:openrelay.metered.ca:443?transport=tcp",
-        ],
-        "username": "openrelayproject",
-        "credential": "openrelayproject",
-        "credentialType": "password"
-      },
-    ],
-    "iceCandidatePoolSize": 10
-}
+ICE_SERVERS = {"iceServers":[{"urls":["stun:stun.cloudflare.com:3478","stun:stun.cloudflare.com:53"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp","turn:turn.cloudflare.com:3478?transport=tcp","turns:turn.cloudflare.com:5349?transport=tcp","turn:turn.cloudflare.com:53?transport=udp","turn:turn.cloudflare.com:80?transport=tcp","turns:turn.cloudflare.com:443?transport=tcp"],"username":"g0e86ec05b94407fb8406184609716f2a5196dee9125367456a0f73dc5516aa8","credential":"c4d78514269bce94108fbc7cc080eea6b060fcc92aabc18cc97e74e226829f4b"}]}
 
 # --- Cloudflare Dynamic TURN Credentials ---
 TURN_KEY_ID = os.environ.get("CLOUDFLARE_TURN_KEY_ID")
